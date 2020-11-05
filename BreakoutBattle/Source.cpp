@@ -15,6 +15,7 @@
 sf::IpAddress otherIp;
 unsigned short otherPort;
 unsigned short port;
+
 //packet definition
 struct PacketType
 {
@@ -323,7 +324,7 @@ void checkPackets(sf::UdpSocket* socket, GameState* gameState, sf::RenderWindow*
 		else
 		{
 			networkLock.lock();
-			std::cout << "Packet received" << std::endl;
+			otherIp = ipIn;
 			foundPlayer = true;
 			//if a whole packet is received then act on the data
 			unsigned int packetNum;

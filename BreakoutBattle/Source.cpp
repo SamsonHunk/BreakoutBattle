@@ -55,6 +55,34 @@ struct Ball
 	float ballSpeed = 300;
 	int lastHitBy = 0;
 	bool isShot = false;
+
+	bool checkCollision(sf::RectangleShape* shape, float dt)
+	{
+		//check if the ball has collided with the given shape
+		if (shape->getGlobalBounds().intersects(ballShape.getGlobalBounds()))
+		{
+			//there is a collision; figure out which edge the ball bounced on
+			//this is done by simulating the ball one frame ahead to determine if the ball needs to bounce on the x or y axis
+			sf::FloatRect nextPos = sf::FloatRect((ballPos + sf::Vector2f(ballDir.x, 0) * ballSpeed * dt), ballShape.getSize());
+			if (shape->getGlobalBounds().intersects(nextPos))
+			{
+				//bounce the ball on the y direction
+				ballDir = sf::Vector2f(ballDir.x, ballDir.y * -1.f);
+			}
+			else //else bounce it on the x direction
+			{
+				ballDir = sf::Vector2f(ballDir.x * -1.f, ballDir.y);
+			}
+
+			ballPos = ballPos + (ballDir * ballSpeed * dt);
+			return true;
+		}
+		else
+		{
+			//no collision return false
+			return false;
+		}
+	};
 };
 
 struct Block
@@ -235,11 +263,11 @@ void update(float dt, GameState* gameState, InputManager* inputManager, sf::Rend
 				//angle the ball if the player is moving while shooting the ball
 				if (inputManager->GetKey(sf::Keyboard::Left))
 				{
-					gameState->balls[it].ballDir = sf::Vector2f(-.5f, -1.f);
+					gameState->balls[it].ballDir = sf::Vector2f(-.75f, -1.f);
 				}
 				else if (inputManager->GetKey(sf::Keyboard::Right))
 				{
-					gameState->balls[it].ballDir = sf::Vector2f(.5f, -1.f);
+					gameState->balls[it].ballDir = sf::Vector2f(.75f, -1.f);
 				}
 				else
 				{
@@ -271,6 +299,30 @@ void update(float dt, GameState* gameState, InputManager* inputManager, sf::Rend
 				offset = -10.f;
 			}
 			gameState->balls[it].ballPos = gameState->players[gameState->balls[it].lastHitBy].playerPos - sf::Vector2f(-25.f, offset);
+		}
+
+		//ball collision detection, seperate the screen into distinct areas for collision checks
+		if (gameState->balls[it].ballPos.y < 60.f)
+		{
+			gameState->balls[it].checkCollision(&gameState->players[1].playerShape, dt);
+		}
+		else if (gameState->balls[it].ballPos.y > 720.f)
+		{
+			gameState->balls[it].checkCollision(&gameState->players[0].playerShape, dt);
+		}
+		else if (gameState->balls[it].ballPos.y < 400.f)
+		{
+			// level area 1
+		}
+		else
+		{
+			// level area 2
+		}
+
+		//bounce the ball off the edges of the screen
+		if (gameState->balls[it].ballPos.x < 0 || gameState->balls[it].ballPos.x > 790.f)
+		{
+			gameState->balls[it].ballDir = sf::Vector2f(gameState->balls[it].ballDir.x * -1.f, gameState->balls[it].ballDir.y);
 		}
 	}
 

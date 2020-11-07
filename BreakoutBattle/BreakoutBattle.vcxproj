@@ -147,10 +147,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="InputManager.cpp" />
+    <ClCompile Include="PosPacket.cpp" />
     <ClCompile Include="Source.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="InputManager.h" />
+    <ClInclude Include="PosPacket.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

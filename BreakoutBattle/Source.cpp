@@ -6,6 +6,7 @@
 #include "InputManager.h"
 #include <thread>
 #include <mutex>
+#include "PosPacket.h"
 
 #define MAXPLAYERS 2
 #define MAXBALLS 2
@@ -16,16 +17,9 @@ sf::IpAddress otherIp;
 unsigned short otherPort;
 unsigned short port;
 
-//packet definition
-struct PacketType
-{
-	unsigned int packetNum = 0; //packet iterator to keep track of the most up to date packet
-	float playerPos = 0; //current x pos of the other player
-	int playerDirection = 0;
-};
+PosPacket lastPacket;
+PosPacket outPacket;
 
-PacketType lastPacket;
-PacketType outPacket;
 bool newPacketFlag = false;
 bool foundPlayer = false;
 
@@ -219,16 +213,16 @@ void update(float dt, GameState* gameState, InputManager* inputManager, sf::Rend
 	if (inputManager->GetKey(sf::Keyboard::Left))
 	{
 		gameState->players[0].playerPos.x -= gameState->players[0].playerSpeed * dt;
-		outPacket.playerDirection = 1;
+		outPacket.playerDir = 1;
 	}
 	else if (inputManager->GetKey(sf::Keyboard::Right))
 	{
 		gameState->players[0].playerPos.x += gameState->players[0].playerSpeed * dt;
-		outPacket.playerDirection = 2;
+		outPacket.playerDir = 2;
 	}
 	else
 	{
-		outPacket.playerDirection = 0;
+		outPacket.playerDir = 0;
 	}
 
 	if (inputManager->GetKey(sf::Keyboard::Space))
@@ -279,6 +273,29 @@ void update(float dt, GameState* gameState, InputManager* inputManager, sf::Rend
 			gameState->balls[it].ballPos = gameState->players[gameState->balls[it].lastHitBy].playerPos - sf::Vector2f(-25.f, offset);
 		}
 	}
+
+	//update enemy player position
+	if (newPacketFlag)
+	{
+		//if there is a new packet, update the current positions with that info
+		gameState->players[1].playerPos = sf::Vector2f(lastPacket.playerPos, 0.f);
+		newPacketFlag = false;
+	}
+	else
+	{
+		//if there is no new packet, try to determine where the player would go
+		switch (lastPacket.playerDir)
+		{
+		case 1:
+			gameState->players[1].playerPos.x -= gameState->players[1].playerSpeed * dt;
+			break;
+		case 2:
+			gameState->players[1].playerPos.x += gameState->players[1].playerSpeed * dt;
+			break;
+		default:
+			break;
+		}
+	}
 }
 
 void render(float dt, GameState* gameState, InputManager* inputManager, sf::RenderTexture* renderTex, sf::RenderWindow* window)
@@ -313,9 +330,9 @@ void checkPackets(sf::UdpSocket* socket, GameState* gameState, sf::RenderWindow*
 	unsigned short portIn;
 	while (renderWindow->isOpen())
 	{
-		sf::Packet packet;
+		PosPacket packet;
 		//check for new packets
-		if (socket->receive(packet, ipIn, portIn) != socket->Done)
+		if (socket->receive(packet.packet, ipIn, portIn) != socket->Done)
 		{
 			networkLock.lock();
 			std::cout << "Error retrieving packet" << std::endl;
@@ -326,17 +343,15 @@ void checkPackets(sf::UdpSocket* socket, GameState* gameState, sf::RenderWindow*
 			networkLock.lock();
 			otherIp = ipIn;
 			foundPlayer = true;
-			//if a whole packet is received then act on the data
-			unsigned int packetNum;
-			packet >> packetNum;
 
-			//check that the new packet is more up to date than the last received packet
-			if (packetNum > lastPacket.packetNum)
-			{// if it does then push the data into the packet struct
-				lastPacket.packetNum = packetNum;
-				packet >> lastPacket.playerPos >> lastPacket.playerDirection;
+			//if a whole packet is received then act on the data, make sure the new packet is more up to date
+			if (packet.testPacketNum() > lastPacket.packetNum)
+			{
+				packet.unpack();
+				lastPacket = packet;
+				newPacketFlag = true;
 			}
-			newPacketFlag = true;
+
 			networkLock.unlock();
 		}
 	}
@@ -346,12 +361,20 @@ void sendPackets(sf::UdpSocket* socket, GameState* gameState)
 {
 	if (foundPlayer)
 	{
-		sf::Packet packet;
+		//offload data into packet struct
 		outPacket.packetNum++;
-		packet << outPacket.packetNum << outPacket.playerPos << outPacket.playerDirection;
+		outPacket.playerPos = gameState->players[0].playerPos.x;
+		outPacket.ballPos[0] = gameState->balls[0].ballPos;
+		outPacket.ballPos[1] = gameState->balls[1].ballPos;
+		outPacket.ballDir[0] = gameState->balls[0].ballDir;
+		outPacket.ballDir[1] = gameState->balls[1].ballDir;
+		outPacket.ballIsShot[0] = gameState->balls[0].isShot;
+		outPacket.ballIsShot[1] = gameState->balls[1].isShot;
+		outPacket.pack();
+		
 
 		//send a packet with the most up to date information
-		if (socket->send(packet, otherIp, otherPort) != socket->Done)
+		if (socket->send(outPacket.packet, otherIp, otherPort) != socket->Done)
 		{
 			std::cout << "Packet failed to send" << std::endl;
 		}

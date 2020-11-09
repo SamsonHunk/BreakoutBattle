@@ -1,4 +1,8 @@
 //includes
+#define _CRT_SECURE_NO_WARNINGS //to be able to use fopen()
+#define MAXPLAYERS 2
+#define MAXBALLS 2
+
 #include <SFML/Graphics.hpp>
 #include <SFML/Network.hpp>
 #include <iostream>
@@ -7,9 +11,10 @@
 #include <thread>
 #include <mutex>
 #include "PosPacket.h"
-
-#define MAXPLAYERS 2
-#define MAXBALLS 2
+#include "rapidjson/document.h"
+#include "rapidjson/filereadstream.h"
+#include "rapidjson/filewritestream.h"
+#include "rapidjson/writer.h"
 
 ///////////////////////////////////////////////
 //networking objects
@@ -87,8 +92,40 @@ struct Ball
 
 struct Block
 {
+	Block(int health, sf::Vector2f pos)
+	{
+		blockHealth = health;
+		blockShape.setSize(sf::Vector2f(80.f, 40.f));
+		blockShape.setPosition(pos);
+		switch (health)
+		{
+		case 1:
+			blockShape.setFillColor(sf::Color::Red);
+			break;
+		case 2:
+			blockShape.setFillColor(sf::Color::Yellow);
+			break;
+		case 3:
+			blockShape.setFillColor(sf::Color::Green);
+			break;
+		default:
+			break;
+		}
+
+		if (pos.y < 400.f)
+		{
+			areaFlag = true;
+		}
+		else
+		{
+			areaFlag = false;
+		}
+	}
+
 	sf::RectangleShape blockShape;
 	int blockHealth = 0;
+	bool areaFlag = false;
+	bool blockIsDead = false;
 };
 
 struct GameState
@@ -122,6 +159,25 @@ float Dot(sf::Vector2f v1, sf::Vector2f v2)
 	return (v1.x * v2.x) + (v1.y * v2.y);
 }
 //////////////////////////////////////////////////////////////////////
+
+//load the information from a JSON file into memory
+
+rapidjson::Document LoadJSON(const char* filename)
+{
+	FILE* file = fopen(filename, "rb");
+	
+	char readBuffer[1024];
+
+	rapidjson::FileReadStream inputStream(file, readBuffer, sizeof(readBuffer));
+
+	rapidjson::Document doc;
+	doc.ParseStream(inputStream);
+	fclose(file);
+
+
+	return doc;
+}
+
 
 int main()
 {
@@ -185,14 +241,39 @@ int main()
 
 	sf::Clock clock;
 
-	//TODO: load level
-
 	//initialise gamestate objects
 	GameState gameState;
 	gameState.players[1].playerPos = sf::Vector2f(0, 0);
 	gameState.players[0].playerPos = sf::Vector2f(0, 790);
 	gameState.balls[0].lastHitBy = 0;
 	gameState.balls[1].lastHitBy = 1;
+
+	//load level data from JSON file
+	rapidjson::Document levelDoc = LoadJSON("level.json");
+
+	//populate gamestate with level geometry
+	if (levelDoc.HasMember("level"))
+	{
+		//center the level to the middle of the screen
+		float yOffset = 400.f - ((float)levelDoc["level"].Size() / 2.f) * 40.f;
+
+		for (int y = 0; y < levelDoc["level"].Size(); y++)
+		{
+			for (int x = 0; x < levelDoc["level"][y]["layer"].Size(); x++)
+			{
+				if (levelDoc["level"][y]["layer"][x].GetInt() > 0)
+				{
+					//load any blocks from the json file into memory
+					gameState.levelLayout.push_back(Block(levelDoc["level"][y]["layer"][x].GetInt(), sf::Vector2f((float)x * 80.f, yOffset + (float)y * 40.f)));
+
+				}
+			}
+		}
+	}
+	else
+	{
+		return 5;
+	}
 
 	//create packet receipt thread
 	std::thread receiptThread(checkPackets, &socket, &gameState, &window);
@@ -313,10 +394,52 @@ void update(float dt, GameState* gameState, InputManager* inputManager, sf::Rend
 		else if (gameState->balls[it].ballPos.y < 400.f)
 		{
 			// level area 1
+			for (int levelIt = 0; levelIt < gameState->levelLayout.size(); levelIt++)
+			{
+				if (gameState->levelLayout[levelIt].areaFlag)
+				{
+					if (!gameState->levelLayout[levelIt].blockIsDead)
+					{
+						if (gameState->balls[it].checkCollision(&gameState->levelLayout[levelIt].blockShape, dt))
+						{//if a ball collides with a level block, neg a health from it
+							if (--gameState->levelLayout[levelIt].blockHealth == 0)
+							{
+								//if a block has 0 health, hide it and remove it's collision detection
+								gameState->levelLayout[levelIt].blockIsDead = true;
+							}
+						}
+					}
+				}
+				else
+				{
+					break;
+				}
+			}
 		}
 		else
 		{
 			// level area 2
+			for (int levelIt = gameState->levelLayout.size() - 1; levelIt > 0; levelIt--)
+			{
+				if (!gameState->levelLayout[levelIt].areaFlag)
+				{
+					if (!gameState->levelLayout[levelIt].blockIsDead)
+					{
+						if (gameState->balls[it].checkCollision(&gameState->levelLayout[levelIt].blockShape, dt))
+						{//if a ball collides with a level block, neg a health from it
+							if (--gameState->levelLayout[levelIt].blockHealth == 0)
+							{
+								//if a block has 0 health, hide it and remove it's collision detection
+								gameState->levelLayout[levelIt].blockIsDead = true;
+							}
+						}
+					}
+				}
+				else
+				{
+					break;
+				}
+			}
 		}
 
 		//bounce the ball off the edges of the screen
@@ -362,7 +485,13 @@ void render(float dt, GameState* gameState, InputManager* inputManager, sf::Rend
 		window->draw(gameState->players[it].playerShape);
 	}
 
-	//TODO: render the level
+	for (int it = 0; it < gameState->levelLayout.size(); it++)
+	{
+		if (!gameState->levelLayout[it].blockIsDead)
+		{
+			window->draw(gameState->levelLayout[it].blockShape);
+		}
+	}
 
 
 	//render the balls

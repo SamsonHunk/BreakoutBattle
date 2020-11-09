@@ -17,6 +17,7 @@
 mono_crash.*
 
 SFML/
+BreakoutBattle/rapidjson/
 
 # Build results
 [Dd]ebug/

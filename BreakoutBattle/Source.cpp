@@ -21,6 +21,7 @@
 sf::IpAddress otherIp;
 unsigned short otherPort;
 unsigned short port;
+short int playerNum = 0;
 
 PosPacket lastPacket;
 PosPacket outPacket;
@@ -60,6 +61,7 @@ struct Ball
 	float ballSpeed = 300;
 	int lastHitBy = 0;
 	bool isShot = false;
+	int ballNumber = 0;
 
 	bool checkCollision(sf::RectangleShape* shape, float dt)
 	{
@@ -100,13 +102,13 @@ struct Block
 		switch (health)
 		{
 		case 1:
-			blockShape.setFillColor(sf::Color::Red);
-			break;
-		case 2:
 			blockShape.setFillColor(sf::Color::Yellow);
 			break;
+		case 2:
+			blockShape.setFillColor(sf::Color(255,165,0));
+			break;
 		case 3:
-			blockShape.setFillColor(sf::Color::Green);
+			blockShape.setFillColor(sf::Color::Red);
 			break;
 		default:
 			break;
@@ -195,11 +197,13 @@ int main()
 		{
 			port = 5400;
 			otherPort = 5410;
+			playerNum = 0;
 		}
 		else
 		{
 			port = 5410;
 			otherPort = 5400;
+			playerNum = 1;
 		}
 
 		if (socket.bind(port, sf::IpAddress::LocalHost) != socket.Done)
@@ -248,6 +252,17 @@ int main()
 	gameState.balls[0].lastHitBy = 0;
 	gameState.balls[1].lastHitBy = 1;
 
+	if (playerNum == 0)
+	{
+		gameState.balls[0].ballNumber = 0;
+		gameState.balls[1].ballNumber = 1;
+	}
+	else
+	{
+		gameState.balls[0].ballNumber = 1;
+		gameState.balls[1].ballNumber = 0;
+	}
+
 	//load level data from JSON file
 	rapidjson::Document levelDoc = LoadJSON("level.json");
 
@@ -265,7 +280,6 @@ int main()
 				{
 					//load any blocks from the json file into memory
 					gameState.levelLayout.push_back(Block(levelDoc["level"][y]["layer"][x].GetInt(), sf::Vector2f((float)x * 80.f, yOffset + (float)y * 40.f)));
-
 				}
 			}
 		}
@@ -354,7 +368,6 @@ void update(float dt, GameState* gameState, InputManager* inputManager, sf::Rend
 				{
 					gameState->balls[it].ballDir = sf::Vector2f(0.f, -1.f);
 				}
-				gameState->balls[it].lastHitBy = 0;
 				break;
 			}
 		}
@@ -383,61 +396,90 @@ void update(float dt, GameState* gameState, InputManager* inputManager, sf::Rend
 		}
 
 		//ball collision detection, seperate the screen into distinct areas for collision checks
-		if (gameState->balls[it].ballPos.y < 60.f)
+		if (gameState->balls[it].isShot)
 		{
-			gameState->balls[it].checkCollision(&gameState->players[1].playerShape, dt);
-		}
-		else if (gameState->balls[it].ballPos.y > 720.f)
-		{
-			gameState->balls[it].checkCollision(&gameState->players[0].playerShape, dt);
-		}
-		else if (gameState->balls[it].ballPos.y < 400.f)
-		{
-			// level area 1
-			for (int levelIt = 0; levelIt < gameState->levelLayout.size(); levelIt++)
+			if (gameState->balls[it].ballPos.y < 60.f)
 			{
-				if (gameState->levelLayout[levelIt].areaFlag)
+				gameState->balls[it].checkCollision(&gameState->players[1].playerShape, dt);
+			}
+			else if (gameState->balls[it].ballPos.y > 720.f)
+			{
+				gameState->balls[it].checkCollision(&gameState->players[0].playerShape, dt);
+			}
+			else if (gameState->balls[it].ballPos.y < 400.f)
+			{
+				// level area 1
+				for (int levelIt = 0; levelIt < gameState->levelLayout.size(); levelIt++)
 				{
-					if (!gameState->levelLayout[levelIt].blockIsDead)
+					if (gameState->levelLayout[levelIt].areaFlag)
 					{
-						if (gameState->balls[it].checkCollision(&gameState->levelLayout[levelIt].blockShape, dt))
-						{//if a ball collides with a level block, neg a health from it
-							if (--gameState->levelLayout[levelIt].blockHealth == 0)
-							{
-								//if a block has 0 health, hide it and remove it's collision detection
-								gameState->levelLayout[levelIt].blockIsDead = true;
+						if (!gameState->levelLayout[levelIt].blockIsDead)
+						{
+							if (gameState->balls[it].checkCollision(&gameState->levelLayout[levelIt].blockShape, dt))
+							{//if a ball collides with a level block, neg a health from it
+								switch (--gameState->levelLayout[levelIt].blockHealth)
+								{
+								case 1:
+									gameState->levelLayout[levelIt].blockShape.setFillColor(sf::Color::Yellow);
+									break;
+								case 2:
+									gameState->levelLayout[levelIt].blockShape.setFillColor(sf::Color(255, 165, 0));
+									break;
+								case 3:
+									gameState->levelLayout[levelIt].blockShape.setFillColor(sf::Color::Red);
+									break;
+								case 0:
+									//if a block has 0 health, hide it and remove it's collision detection
+									gameState->levelLayout[levelIt].blockIsDead = true;
+									break;
+								default:
+									break;
+								}
 							}
 						}
 					}
-				}
-				else
-				{
-					break;
+					else
+					{
+						break;
+					}
 				}
 			}
-		}
-		else
-		{
-			// level area 2
-			for (int levelIt = gameState->levelLayout.size() - 1; levelIt > 0; levelIt--)
+			else
 			{
-				if (!gameState->levelLayout[levelIt].areaFlag)
+				// level area 2
+				for (int levelIt = gameState->levelLayout.size() - 1; levelIt > 0; levelIt--)
 				{
-					if (!gameState->levelLayout[levelIt].blockIsDead)
+					if (!gameState->levelLayout[levelIt].areaFlag)
 					{
-						if (gameState->balls[it].checkCollision(&gameState->levelLayout[levelIt].blockShape, dt))
-						{//if a ball collides with a level block, neg a health from it
-							if (--gameState->levelLayout[levelIt].blockHealth == 0)
-							{
-								//if a block has 0 health, hide it and remove it's collision detection
-								gameState->levelLayout[levelIt].blockIsDead = true;
+						if (!gameState->levelLayout[levelIt].blockIsDead)
+						{
+							if (gameState->balls[it].checkCollision(&gameState->levelLayout[levelIt].blockShape, dt))
+							{//if a ball collides with a level block, neg a health from it
+								switch (--gameState->levelLayout[levelIt].blockHealth)
+								{
+								case 1:
+									gameState->levelLayout[levelIt].blockShape.setFillColor(sf::Color::Yellow);
+									break;
+								case 2:
+									gameState->levelLayout[levelIt].blockShape.setFillColor(sf::Color(255, 165, 0));
+									break;
+								case 3:
+									gameState->levelLayout[levelIt].blockShape.setFillColor(sf::Color::Red);
+									break;
+								case 0:
+									//if a block has 0 health, hide it and remove it's collision detection
+									gameState->levelLayout[levelIt].blockIsDead = true;
+									break;
+								default:
+									break;
+								}
 							}
 						}
 					}
-				}
-				else
-				{
-					break;
+					else
+					{
+						break;
+					}
 				}
 			}
 		}
@@ -454,6 +496,22 @@ void update(float dt, GameState* gameState, InputManager* inputManager, sf::Rend
 	{
 		//if there is a new packet, update the current positions with that info
 		gameState->players[1].playerPos = sf::Vector2f(lastPacket.playerPos, 0.f);
+
+		//update the current positions of the ball if they are not in our half of the screen
+		for (int it = 0; it < MAXBALLS; it++)
+		{
+			if (gameState->balls[it].ballPos.y < 100.f || (gameState->balls[it].lastHitBy == playerNum && gameState->balls[it].ballPos.y > 100.f))
+			{
+				gameState->balls[it].isShot = lastPacket.ballIsShot[gameState->balls[it].ballNumber];
+
+				if (gameState->balls[it].isShot)
+				{
+					gameState->balls[it].ballPos = lastPacket.ballPos[gameState->balls[it].ballNumber];
+					gameState->balls[it].ballDir = lastPacket.ballDir[gameState->balls[it].ballNumber];
+				}
+			}
+		}
+
 		newPacketFlag = false;
 	}
 	else
@@ -476,8 +534,6 @@ void update(float dt, GameState* gameState, InputManager* inputManager, sf::Rend
 void render(float dt, GameState* gameState, InputManager* inputManager, sf::RenderTexture* renderTex, sf::RenderWindow* window)
 {
 	//render all the objects onto the screen
-
-
 	for (int it = 0; it < MAXPLAYERS; it++)
 	{
 		gameState->players[it].playerShape.setFillColor(sf::Color::Green);
@@ -512,11 +568,25 @@ void checkPackets(sf::UdpSocket* socket, GameState* gameState, sf::RenderWindow*
 	while (renderWindow->isOpen())
 	{
 		PosPacket packet;
+		sf::Socket::Status status = socket->receive(packet.packet, ipIn, portIn);
 		//check for new packets
-		if (socket->receive(packet.packet, ipIn, portIn) != socket->Done)
+		if (status != socket->Done)
 		{
 			networkLock.lock();
-			std::cout << "Error retrieving packet" << std::endl;
+			std::cout << "Error retrieving packet: ";
+			switch (status)
+			{
+			case sf::Socket::Disconnected:
+				std::cout << "Disconnected";
+				break;
+			case sf::Socket::Error:
+				std::cout << "Error";
+				break;
+			case sf::Socket::NotReady:
+				std::cout << "Not Ready";
+				break;
+			}
+			std::cout << std::endl;
 			networkLock.unlock();
 		}
 		else
@@ -545,14 +615,15 @@ void sendPackets(sf::UdpSocket* socket, GameState* gameState)
 		//offload data into packet struct
 		outPacket.packetNum++;
 		outPacket.playerPos = gameState->players[0].playerPos.x;
-		outPacket.ballPos[0] = gameState->balls[0].ballPos;
-		outPacket.ballPos[1] = gameState->balls[1].ballPos;
-		outPacket.ballDir[0] = gameState->balls[0].ballDir;
-		outPacket.ballDir[1] = gameState->balls[1].ballDir;
-		outPacket.ballIsShot[0] = gameState->balls[0].isShot;
-		outPacket.ballIsShot[1] = gameState->balls[1].isShot;
+		outPacket.ballPos[gameState->balls[0].ballNumber] = sf::Vector2f(gameState->balls[0].ballPos.x, 800 - gameState->balls[0].ballPos.y);
+		outPacket.ballPos[gameState->balls[1].ballNumber] = sf::Vector2f(gameState->balls[1].ballPos.x, 800 - gameState->balls[1].ballPos.y);
+		outPacket.ballDir[gameState->balls[0].ballNumber] = gameState->balls[0].ballDir * -1.f;
+		outPacket.ballDir[gameState->balls[1].ballNumber] = gameState->balls[1].ballDir * -1.f;
+		outPacket.ballIsShot[gameState->balls[0].ballNumber] = gameState->balls[0].isShot;
+		outPacket.ballIsShot[gameState->balls[1].ballNumber] = gameState->balls[1].isShot;
 		outPacket.pack();
 		
+		std::cout << std::to_string(outPacket.ballPos[0].x) + " " + std::to_string(outPacket.ballPos[0].y) << std::endl;
 
 		//send a packet with the most up to date information
 		if (socket->send(outPacket.packet, otherIp, otherPort) != socket->Done)

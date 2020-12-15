@@ -16,21 +16,19 @@
 #include "rapidjson/filewritestream.h"
 #include "rapidjson/writer.h"
 
-///////////////////////////////////////////////
+////////////////////////////////////////////
 //networking objects
+sf::UdpSocket socket;
 sf::IpAddress otherIp;
-unsigned short otherPort;
-unsigned short port;
-short int playerNum = 0;
-
-PosPacket lastPacket;
-PosPacket outPacket;
+unsigned short port, otherPort;
+PosPacket lastPacket, outPacket;
 
 bool newPacketFlag = false;
 bool foundPlayer = false;
 
 std::mutex networkLock;
-////////////////////////////////////////////////
+
+short int playerNum, enemyNum;
 
 ///////////////////////////////////////////
 //game objects
@@ -61,7 +59,6 @@ struct Ball
 	float ballSpeed = 300;
 	int lastHitBy = 0;
 	bool isShot = false;
-	int ballNumber = 0;
 
 	bool checkCollision(sf::RectangleShape* shape, float dt)
 	{
@@ -105,7 +102,7 @@ struct Block
 			blockShape.setFillColor(sf::Color::Yellow);
 			break;
 		case 2:
-			blockShape.setFillColor(sf::Color(255,165,0));
+			blockShape.setFillColor(sf::Color(255, 165, 0));
 			break;
 		case 3:
 			blockShape.setFillColor(sf::Color::Red);
@@ -141,10 +138,11 @@ struct GameState
 //function forward declarations
 void update(float dt, GameState* gameState, InputManager* inputManager, sf::RenderWindow* window);
 void render(float dt, GameState* gameState, InputManager* inputManager, sf::RenderTexture* renderTex, sf::RenderWindow* window);
-void checkPackets(sf::UdpSocket* socket, GameState* gameState, sf::RenderWindow* renderWindow);
-void sendPackets(sf::UdpSocket* socket, GameState* gameState);
+void checkPackets(GameState* gameState, sf::RenderWindow* renderWindow);
+void sendPackets(GameState* gameState);
 
-///////////////////////////////////////////////////////////////////////  vector maths
+/////////////////////////////////////////////////////////////////////
+//  vector maths
 float Length(sf::Vector2f v)
 {
 	return ((v.x * v.x) + (v.y * v.y));
@@ -162,12 +160,12 @@ float Dot(sf::Vector2f v1, sf::Vector2f v2)
 }
 //////////////////////////////////////////////////////////////////////
 
-//load the information from a JSON file into memory
+// load the information from a JSON file into memory
 
 rapidjson::Document LoadJSON(const char* filename)
 {
 	FILE* file = fopen(filename, "rb");
-	
+
 	char readBuffer[1024];
 
 	rapidjson::FileReadStream inputStream(file, readBuffer, sizeof(readBuffer));
@@ -180,16 +178,12 @@ rapidjson::Document LoadJSON(const char* filename)
 	return doc;
 }
 
-
 int main()
 {
-	sf::UdpSocket socket;
+	//bind UDP socket and setup socket
 	socket.setBlocking(true);
-	
-	{//bind UDP socket
+	{
 		int answer;
-		//initial game setup
-	
 		std::cout << "1 Host game, 2 Join game" << std::endl;
 		std::cin >> answer;
 
@@ -198,12 +192,14 @@ int main()
 			port = 5400;
 			otherPort = 5410;
 			playerNum = 0;
+			enemyNum = 1;
 		}
 		else
 		{
 			port = 5410;
 			otherPort = 5400;
 			playerNum = 1;
+			enemyNum = 0;
 		}
 
 		if (socket.bind(port, sf::IpAddress::LocalHost) != socket.Done)
@@ -252,17 +248,6 @@ int main()
 	gameState.balls[0].lastHitBy = 0;
 	gameState.balls[1].lastHitBy = 1;
 
-	if (playerNum == 0)
-	{
-		gameState.balls[0].ballNumber = 0;
-		gameState.balls[1].ballNumber = 1;
-	}
-	else
-	{
-		gameState.balls[0].ballNumber = 1;
-		gameState.balls[1].ballNumber = 0;
-	}
-
 	//load level data from JSON file
 	rapidjson::Document levelDoc = LoadJSON("level.json");
 
@@ -289,8 +274,8 @@ int main()
 		return 5;
 	}
 
-	//create packet receipt thread
-	std::thread receiptThread(checkPackets, &socket, &gameState, &window);
+	// create packet receipt thread
+	std::thread receiptThread(checkPackets, &gameState, &window);
 
 	while (window.isOpen())
 	{
@@ -322,7 +307,7 @@ int main()
 		update(frameTime.asSeconds(), &gameState, &inputManager, &window);
 		render(frameTime.asSeconds(), &gameState, &inputManager, &renderTex, &window);
 		networkLock.unlock();
-		sendPackets(&socket, &gameState);
+		sendPackets(&gameState);
 		window.display();
 	}
 
@@ -349,10 +334,10 @@ void update(float dt, GameState* gameState, InputManager* inputManager, sf::Rend
 	}
 
 	if (inputManager->GetKey(sf::Keyboard::Space))
-	{//press space to fire a ball
+	{//press space to fire an attached ball
 		for (int it = 0; it < MAXBALLS; it++)
 		{
-			if (gameState->balls[it].lastHitBy == 0 && !gameState->balls[it].isShot)
+			if (gameState->balls[it].lastHitBy == playerNum && !gameState->balls[it].isShot)
 			{
 				gameState->balls[it].isShot = true;
 				//angle the ball if the player is moving while shooting the ball
@@ -374,7 +359,7 @@ void update(float dt, GameState* gameState, InputManager* inputManager, sf::Rend
 	}
 
 	//update the ball positions
-	for (int it = 0; it < MAXBALLS; ++it)
+	for (int it = 0; it < MAXBALLS; it++)
 	{
 		//if the ball has already been shot then move it
 		if (gameState->balls[it].isShot)
@@ -383,17 +368,16 @@ void update(float dt, GameState* gameState, InputManager* inputManager, sf::Rend
 		}
 		else //else, keep it connected to the player until they release it
 		{
-			float offset;
-			if (gameState->balls[it].lastHitBy == 0)
+			if (gameState->balls[it].lastHitBy == playerNum)
 			{
-				offset = 10.f;
+				gameState->balls[it].ballPos = gameState->players[0].playerPos - sf::Vector2f(-25.f, 10.f);
 			}
 			else
 			{
-				offset = -10.f;
+				gameState->balls[it].ballPos = gameState->players[1].playerPos - sf::Vector2f(-25.f, -10.f);
 			}
-			gameState->balls[it].ballPos = gameState->players[gameState->balls[it].lastHitBy].playerPos - sf::Vector2f(-25.f, offset);
 		}
+
 
 		//ball collision detection, seperate the screen into distinct areas for collision checks
 		if (gameState->balls[it].isShot)
@@ -491,23 +475,23 @@ void update(float dt, GameState* gameState, InputManager* inputManager, sf::Rend
 		}
 	}
 
-	//update enemy player position
+	//if there is a new packet, update all relevant objects with the new data
 	if (newPacketFlag)
 	{
 		//if there is a new packet, update the current positions with that info
 		gameState->players[1].playerPos = sf::Vector2f(lastPacket.playerPos, 0.f);
 
-		//update the current positions of the ball if they are not in our half of the screen
+		//each player has priority over the ball position if: the ball is near the player or the ball was last hit by the player and is not near the enemy
 		for (int it = 0; it < MAXBALLS; it++)
 		{
-			if (gameState->balls[it].ballPos.y < 100.f || (gameState->balls[it].lastHitBy == playerNum && gameState->balls[it].ballPos.y > 100.f))
+			if (gameState->balls[it].ballPos.y < 100.f || (gameState->balls[it].lastHitBy == enemyNum && gameState->balls[it].ballPos.y < 700.f))
 			{
-				gameState->balls[it].isShot = lastPacket.ballIsShot[gameState->balls[it].ballNumber];
+				gameState->balls[it].isShot = lastPacket.ballIsShot[it];
 
 				if (gameState->balls[it].isShot)
 				{
-					gameState->balls[it].ballPos = lastPacket.ballPos[gameState->balls[it].ballNumber];
-					gameState->balls[it].ballDir = lastPacket.ballDir[gameState->balls[it].ballNumber];
+					gameState->balls[it].ballPos = lastPacket.ballPos[it];
+					gameState->balls[it].ballDir = lastPacket.ballDir[it];
 				}
 			}
 		}
@@ -516,7 +500,7 @@ void update(float dt, GameState* gameState, InputManager* inputManager, sf::Rend
 	}
 	else
 	{
-		//if there is no new packet, try to determine where the player would go
+		//if there is no new packet then predict where the player should go
 		switch (lastPacket.playerDir)
 		{
 		case 1:
@@ -559,18 +543,15 @@ void render(float dt, GameState* gameState, InputManager* inputManager, sf::Rend
 
 }
 
-
-
-void checkPackets(sf::UdpSocket* socket, GameState* gameState, sf::RenderWindow* renderWindow)
+void checkPackets(GameState* gameState, sf::RenderWindow* renderWindow)
 {
 	sf::IpAddress ipIn;
 	unsigned short portIn;
 	while (renderWindow->isOpen())
-	{
+	{//check for new packetss
 		PosPacket packet;
-		sf::Socket::Status status = socket->receive(packet.packet, ipIn, portIn);
-		//check for new packets
-		if (status != socket->Done)
+		sf::Socket::Status status = socket.receive(packet.packet, ipIn, portIn);
+		if (status != socket.Done)
 		{
 			networkLock.lock();
 			std::cout << "Error retrieving packet: ";
@@ -608,25 +589,23 @@ void checkPackets(sf::UdpSocket* socket, GameState* gameState, sf::RenderWindow*
 	}
 }
 
-void sendPackets(sf::UdpSocket* socket, GameState* gameState)
+void sendPackets(GameState* gameState)
 {
 	if (foundPlayer)
 	{
 		//offload data into packet struct
 		outPacket.packetNum++;
 		outPacket.playerPos = gameState->players[0].playerPos.x;
-		outPacket.ballPos[gameState->balls[0].ballNumber] = sf::Vector2f(gameState->balls[0].ballPos.x, 800 - gameState->balls[0].ballPos.y);
-		outPacket.ballPos[gameState->balls[1].ballNumber] = sf::Vector2f(gameState->balls[1].ballPos.x, 800 - gameState->balls[1].ballPos.y);
-		outPacket.ballDir[gameState->balls[0].ballNumber] = gameState->balls[0].ballDir * -1.f;
-		outPacket.ballDir[gameState->balls[1].ballNumber] = gameState->balls[1].ballDir * -1.f;
-		outPacket.ballIsShot[gameState->balls[0].ballNumber] = gameState->balls[0].isShot;
-		outPacket.ballIsShot[gameState->balls[1].ballNumber] = gameState->balls[1].isShot;
+		outPacket.ballPos[0] = sf::Vector2f(gameState->balls[0].ballPos.x, 800 - gameState->balls[0].ballPos.y);
+		outPacket.ballPos[1] = sf::Vector2f(gameState->balls[1].ballPos.x, 800 - gameState->balls[1].ballPos.y);
+		outPacket.ballDir[0] = gameState->balls[0].ballDir * -1.f;
+		outPacket.ballDir[1] = gameState->balls[1].ballDir * -1.f;
+		outPacket.ballIsShot[0] = gameState->balls[0].isShot;
+		outPacket.ballIsShot[1] = gameState->balls[1].isShot;
 		outPacket.pack();
-		
-		std::cout << std::to_string(outPacket.ballPos[0].x) + " " + std::to_string(outPacket.ballPos[0].y) << std::endl;
 
 		//send a packet with the most up to date information
-		if (socket->send(outPacket.packet, otherIp, otherPort) != socket->Done)
+		if (socket.send(outPacket.packet, otherIp, otherPort) != socket.Done)
 		{
 			std::cout << "Packet failed to send" << std::endl;
 		}

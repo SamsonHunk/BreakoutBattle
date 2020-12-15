@@ -149,7 +149,6 @@
     <ClCompile Include="InputManager.cpp" />
     <ClCompile Include="Source.cpp" />
     <ClCompile Include="PosPacket.cpp" />
-    <ClCompile Include="Old.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="InputManager.h" />

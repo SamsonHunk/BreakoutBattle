@@ -21,6 +21,7 @@ public:
 	bool ballIsShot[2];
 	float playerPos;
 	int playerDir;
+	std::vector<int> levelHealth;
 
 	sf::Packet packet;
 };

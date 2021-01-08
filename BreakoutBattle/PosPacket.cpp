@@ -23,6 +23,17 @@ void PosPacket::unpack()
 	}
 
 	packet >> playerPos >> playerDir;
+
+	int levelSize;
+	packet >> levelSize;
+	packet >> levelSize;
+
+	for (int it = 0; it < levelSize; it++)
+	{
+		int value;
+		packet >> value;
+		levelHealth.push_back(value);
+	}
 }
 
 void PosPacket::pack()
@@ -37,4 +48,11 @@ void PosPacket::pack()
 	}
 
 	packet << playerPos << playerDir;
+
+	packet << levelHealth.size();
+
+	for (int it = 0; it < levelHealth.size(); it++)
+	{
+		packet << levelHealth[it];
+	}
 }

@@ -22,6 +22,8 @@ sf::UdpSocket socket;
 sf::IpAddress otherIp;
 unsigned short port, otherPort;
 PosPacket lastPacket, outPacket;
+float packetPing = 5.f; //how many miliseconds the program should wait to send a new packet
+float packetTimer = 0.f;
 
 bool newPacketFlag = false;
 bool foundPlayer = false;
@@ -59,6 +61,7 @@ struct Ball
 	float ballSpeed = 300;
 	int lastHitBy = 0;
 	bool isShot = false;
+	bool networkFlag = false; //flag to show if the ball's position has been updated from a packet this frame
 
 	bool checkCollision(sf::RectangleShape* shape, float dt)
 	{
@@ -78,7 +81,7 @@ struct Ball
 				ballDir = sf::Vector2f(ballDir.x * -1.f, ballDir.y);
 			}
 
-			ballPos = ballPos + (ballDir * ballSpeed * dt);
+			ballPos = ballPos + (ballDir * (ballSpeed * 2.f) * dt);
 			return true;
 		}
 		else
@@ -139,7 +142,7 @@ struct GameState
 void update(float dt, GameState* gameState, InputManager* inputManager, sf::RenderWindow* window);
 void render(float dt, GameState* gameState, InputManager* inputManager, sf::RenderTexture* renderTex, sf::RenderWindow* window);
 void checkPackets(GameState* gameState, sf::RenderWindow* renderWindow);
-void sendPackets(GameState* gameState);
+void sendPackets(GameState* gameState, float dt);
 
 /////////////////////////////////////////////////////////////////////
 //  vector maths
@@ -307,7 +310,7 @@ int main()
 		update(frameTime.asSeconds(), &gameState, &inputManager, &window);
 		render(frameTime.asSeconds(), &gameState, &inputManager, &renderTex, &window);
 		networkLock.unlock();
-		sendPackets(&gameState);
+		sendPackets(&gameState, frameTime.asMilliseconds());
 		window.display();
 	}
 
@@ -358,6 +361,72 @@ void update(float dt, GameState* gameState, InputManager* inputManager, sf::Rend
 		}
 	}
 
+	//if there is a new packet, update all relevant objects with the new data
+	if (newPacketFlag)
+	{
+		//if there is a new packet, update the current positions with that info
+		gameState->players[1].playerPos = sf::Vector2f(lastPacket.playerPos, 0.f);
+
+		//each player has priority over the ball position if: the ball is near the player or the ball was last hit by the player and is not near the enemy
+		for (int it = 0; it < MAXBALLS; it++)
+		{
+			if (gameState->balls[it].ballPos.y < 100.f || (gameState->balls[it].lastHitBy == enemyNum && gameState->balls[it].ballPos.y < 700.f))
+			{
+				gameState->balls[it].isShot = lastPacket.ballIsShot[it];
+
+				if (gameState->balls[it].isShot)
+				{
+					gameState->balls[it].ballPos = lastPacket.ballPos[it];
+					gameState->balls[it].ballDir = lastPacket.ballDir[it];
+				}
+				gameState->balls[it].networkFlag = true;
+			}
+		}
+
+		//keep the current status of the level synced between both players
+		for (int it = 0; it < lastPacket.levelHealth.size(); it++)
+		{
+			if (lastPacket.levelHealth[it] < gameState->levelLayout[it].blockHealth)
+			{
+				gameState->levelLayout[it].blockHealth = lastPacket.levelHealth[it];
+				switch (gameState->levelLayout[it].blockHealth)
+				{
+				case 0:
+					gameState->levelLayout[it].blockShape.setFillColor(sf::Color::Transparent);
+					gameState->levelLayout[it].blockIsDead = true;
+				case 1:
+					gameState->levelLayout[it].blockShape.setFillColor(sf::Color::Yellow);
+					break;
+				case 2:
+					gameState->levelLayout[it].blockShape.setFillColor(sf::Color(255, 165, 0));
+					break;
+				case 3:
+					gameState->levelLayout[it].blockShape.setFillColor(sf::Color::Red);
+					break;
+				default:
+					break;
+				}
+			}
+		}
+
+		newPacketFlag = false;
+	}
+	else
+	{
+		//if there is no new packet then predict where the player should go
+		switch (lastPacket.playerDir)
+		{
+		case 1:
+			gameState->players[1].playerPos.x -= gameState->players[1].playerSpeed * dt;
+			break;
+		case 2:
+			gameState->players[1].playerPos.x += gameState->players[1].playerSpeed * dt;
+			break;
+		default:
+			break;
+		}
+	}
+
 	//update the ball positions
 	for (int it = 0; it < MAXBALLS; it++)
 	{
@@ -382,11 +451,11 @@ void update(float dt, GameState* gameState, InputManager* inputManager, sf::Rend
 		//ball collision detection, seperate the screen into distinct areas for collision checks
 		if (gameState->balls[it].isShot)
 		{
-			if (gameState->balls[it].ballPos.y < 60.f)
+			if (gameState->balls[it].ballPos.y < 120.f)
 			{
 				gameState->balls[it].checkCollision(&gameState->players[1].playerShape, dt);
 			}
-			else if (gameState->balls[it].ballPos.y > 720.f)
+			else if (gameState->balls[it].ballPos.y > 680.f)
 			{
 				gameState->balls[it].checkCollision(&gameState->players[0].playerShape, dt);
 			}
@@ -399,8 +468,8 @@ void update(float dt, GameState* gameState, InputManager* inputManager, sf::Rend
 					{
 						if (!gameState->levelLayout[levelIt].blockIsDead)
 						{
-							if (gameState->balls[it].checkCollision(&gameState->levelLayout[levelIt].blockShape, dt))
-							{//if a ball collides with a level block, neg a health from it
+							if (gameState->balls[it].checkCollision(&gameState->levelLayout[levelIt].blockShape, dt) && gameState->balls[it].lastHitBy == playerNum)
+							{//if a ball collides with a level block, neg a health from it if the ball is under our control
 								switch (--gameState->levelLayout[levelIt].blockHealth)
 								{
 								case 1:
@@ -437,7 +506,7 @@ void update(float dt, GameState* gameState, InputManager* inputManager, sf::Rend
 					{
 						if (!gameState->levelLayout[levelIt].blockIsDead)
 						{
-							if (gameState->balls[it].checkCollision(&gameState->levelLayout[levelIt].blockShape, dt))
+							if (gameState->balls[it].checkCollision(&gameState->levelLayout[levelIt].blockShape, dt) && gameState->balls[it].lastHitBy == playerNum)
 							{//if a ball collides with a level block, neg a health from it
 								switch (--gameState->levelLayout[levelIt].blockHealth)
 								{
@@ -472,45 +541,6 @@ void update(float dt, GameState* gameState, InputManager* inputManager, sf::Rend
 		if (gameState->balls[it].ballPos.x < 0 || gameState->balls[it].ballPos.x > 790.f)
 		{
 			gameState->balls[it].ballDir = sf::Vector2f(gameState->balls[it].ballDir.x * -1.f, gameState->balls[it].ballDir.y);
-		}
-	}
-
-	//if there is a new packet, update all relevant objects with the new data
-	if (newPacketFlag)
-	{
-		//if there is a new packet, update the current positions with that info
-		gameState->players[1].playerPos = sf::Vector2f(lastPacket.playerPos, 0.f);
-
-		//each player has priority over the ball position if: the ball is near the player or the ball was last hit by the player and is not near the enemy
-		for (int it = 0; it < MAXBALLS; it++)
-		{
-			if (gameState->balls[it].ballPos.y < 100.f || (gameState->balls[it].lastHitBy == enemyNum && gameState->balls[it].ballPos.y < 700.f))
-			{
-				gameState->balls[it].isShot = lastPacket.ballIsShot[it];
-
-				if (gameState->balls[it].isShot)
-				{
-					gameState->balls[it].ballPos = lastPacket.ballPos[it];
-					gameState->balls[it].ballDir = lastPacket.ballDir[it];
-				}
-			}
-		}
-
-		newPacketFlag = false;
-	}
-	else
-	{
-		//if there is no new packet then predict where the player should go
-		switch (lastPacket.playerDir)
-		{
-		case 1:
-			gameState->players[1].playerPos.x -= gameState->players[1].playerSpeed * dt;
-			break;
-		case 2:
-			gameState->players[1].playerPos.x += gameState->players[1].playerSpeed * dt;
-			break;
-		default:
-			break;
 		}
 	}
 }
@@ -589,25 +619,35 @@ void checkPackets(GameState* gameState, sf::RenderWindow* renderWindow)
 	}
 }
 
-void sendPackets(GameState* gameState)
+void sendPackets(GameState* gameState, float dt)
 {
 	if (foundPlayer)
 	{
-		//offload data into packet struct
-		outPacket.packetNum++;
-		outPacket.playerPos = gameState->players[0].playerPos.x;
-		outPacket.ballPos[0] = sf::Vector2f(gameState->balls[0].ballPos.x, 800 - gameState->balls[0].ballPos.y);
-		outPacket.ballPos[1] = sf::Vector2f(gameState->balls[1].ballPos.x, 800 - gameState->balls[1].ballPos.y);
-		outPacket.ballDir[0] = gameState->balls[0].ballDir * -1.f;
-		outPacket.ballDir[1] = gameState->balls[1].ballDir * -1.f;
-		outPacket.ballIsShot[0] = gameState->balls[0].isShot;
-		outPacket.ballIsShot[1] = gameState->balls[1].isShot;
-		outPacket.pack();
-
-		//send a packet with the most up to date information
-		if (socket.send(outPacket.packet, otherIp, otherPort) != socket.Done)
+		packetTimer += dt;
+		if (packetTimer >= packetPing)
 		{
-			std::cout << "Packet failed to send" << std::endl;
+			//offload data into packet struct
+			outPacket.packetNum++;
+			outPacket.playerPos = gameState->players[0].playerPos.x;
+			outPacket.ballPos[0] = sf::Vector2f(gameState->balls[0].ballPos.x, 800 - gameState->balls[0].ballPos.y);
+			outPacket.ballPos[1] = sf::Vector2f(gameState->balls[1].ballPos.x, 800 - gameState->balls[1].ballPos.y);
+			outPacket.ballDir[0] = gameState->balls[0].ballDir * -1.f;
+			outPacket.ballDir[1] = gameState->balls[1].ballDir * -1.f;
+			outPacket.ballIsShot[0] = gameState->balls[0].isShot;
+			outPacket.ballIsShot[1] = gameState->balls[1].isShot;
+			outPacket.levelHealth.clear();
+			for (int it = 0; it < gameState->levelLayout.size(); it++)
+			{
+				outPacket.levelHealth.push_back(gameState->levelLayout[it].blockHealth);
+			}
+			outPacket.pack();
+
+			//send a packet with the most up to date information
+			if (socket.send(outPacket.packet, otherIp, otherPort) != socket.Done)
+			{
+				std::cout << "Packet failed to send" << std::endl;
+			}
+			packetTimer = 0.f;
 		}
 	}
 }

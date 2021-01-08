@@ -260,14 +260,31 @@ int main()
 		//center the level to the middle of the screen
 		float yOffset = 400.f - ((float)levelDoc["level"].Size() / 2.f) * 40.f;
 
-		for (int y = 0; y < levelDoc["level"].Size(); y++)
+		if (playerNum == 0)
 		{
-			for (int x = 0; x < levelDoc["level"][y]["layer"].Size(); x++)
+			for (int y = 0; y < levelDoc["level"].Size(); y++)
 			{
-				if (levelDoc["level"][y]["layer"][x].GetInt() > 0)
+				for (int x = 0; x < levelDoc["level"][y]["layer"].Size(); x++)
 				{
-					//load any blocks from the json file into memory
-					gameState.levelLayout.push_back(Block(levelDoc["level"][y]["layer"][x].GetInt(), sf::Vector2f((float)x * 80.f, yOffset + (float)y * 40.f)));
+					if (levelDoc["level"][y]["layer"][x].GetInt() > 0)
+					{
+						//load any blocks from the json file into memory
+						gameState.levelLayout.push_back(Block(levelDoc["level"][y]["layer"][x].GetInt(), sf::Vector2f((float)x * 80.f, yOffset + (float)y * 40.f)));
+					}
+				}
+			}
+		}
+		else
+		{
+			for (int y = levelDoc["level"].Size() - 1; y > -1; y--)
+			{
+				for (int x = 0; x < levelDoc["level"][y]["layer"].Size(); x++)
+				{
+					if (levelDoc["level"][y]["layer"][x].GetInt() > 0)
+					{
+						//load any blocks from the json file into memory
+						gameState.levelLayout.push_back(Block(levelDoc["level"][y]["layer"][x].GetInt(), sf::Vector2f((float)x * 80.f, yOffset + (float)y * 40.f)));
+					}
 				}
 			}
 		}
